@@ -60,6 +60,7 @@ def merge_hdfs_multi_reco(folderdata_list, event_list):
                 if f.endswith(('.h5', '.hdf5')):
                     file_path = os.path.join(root, f)
                     # Read the HDF5 dataset at the path '/DST/Events'
+                    print(file_path)
                     df = pd.read_hdf(file_path, '/RECO/Events')
                     df = df[df["event"].isin(event_list)]
                     dfs.append(df)
