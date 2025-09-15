@@ -31,7 +31,7 @@ def display_event_cluster(df_reco_event):
     
     # --- TOP LEFT: All hits X vs Y ---
     sc0 = axes[0, 0].scatter(df_grouped_xy['X'], df_grouped_xy['Y'], c=df_grouped_xy['E'],
-                             cmap='jet', s=12, marker='o')
+                             cmap='jet', s=30, marker='o')
     axes[0, 0].set_title("All Hits: Q vs X,Y")
     axes[0, 0].set_xlabel("X [mm]")
     axes[0, 0].set_ylabel("Y [mm]")
@@ -47,7 +47,7 @@ def display_event_cluster(df_reco_event):
         cluster_df = df_clustered_xy[df_clustered_xy['cluster'] == cl]
         color = color_sequence[-3] if cl == -1 else color_sequence[cl]
         label = 'Scattered' if cl == -1 else f'Cluster {cl}'
-        axes[0, 1].scatter(cluster_df['X'], cluster_df['Y'], s=12, marker='o', label=label, c=color)
+        axes[0, 1].scatter(cluster_df['X'], cluster_df['Y'], s=30, marker='o', label=label, c=color)
     axes[0, 1].set_title("Clustered Hits: Q vs X,Y")
     axes[0, 1].set_xlabel("X [mm]")
     axes[0, 1].set_ylabel("Y [mm]")
@@ -55,12 +55,14 @@ def display_event_cluster(df_reco_event):
     axes[0, 1].set_ylim(-500, 500)
     axes[0, 1].set_aspect('equal')
     axes[0, 1].set_facecolor("whitesmoke")
+    circle = plt.Circle((0, 0), 400, color='r', fill=False, label='just a ref')
+    axes[0, 1].add_patch(circle)
     axes[0, 1].grid()
     axes[0, 1].legend(markerscale=2, fontsize='small')
     
     # --- MIDDLE LEFT: All hits Z vs Y ---
     sc2 = axes[1, 0].scatter(df_grouped_zy['Z'], df_grouped_zy['Y'], c=df_grouped_zy['E'],
-                             cmap='jet', s=12, marker='o')
+                             cmap='jet', s=30, marker='o')
     axes[1, 0].set_title("All Hits: Q vs Z,Y")
     axes[1, 0].set_xlabel("Z [mm]")
     axes[1, 0].set_ylabel("Y [mm]")
@@ -74,7 +76,7 @@ def display_event_cluster(df_reco_event):
         cluster_df = df_clustered_zy[df_clustered_zy['cluster'] == cl]
         color = color_sequence[-3] if cl == -1 else color_sequence[cl]
         label = 'Scattered' if cl == -1 else f'Cluster {cl}'
-        axes[1, 1].scatter(cluster_df['Z'], cluster_df['Y'], s=12, marker='o', label=label, c=color)
+        axes[1, 1].scatter(cluster_df['Z'], cluster_df['Y'], s=30, marker='o', label=label, c=color)
     axes[1, 1].set_title("Clustered Hits: Q vs Z,Y")
     axes[1, 1].set_xlabel("Z [mm]")
     axes[1, 1].set_ylabel("Y [mm]")
@@ -85,7 +87,7 @@ def display_event_cluster(df_reco_event):
     
     # --- BOTTOM LEFT: All hits X vs Z ---
     sc4 = axes[2, 0].scatter(df_grouped_xz['Z'], df_grouped_xz['X'], c=df_grouped_xz['E'],
-                             cmap='jet', s=12, marker='o')
+                             cmap='jet', s=30, marker='o')
     axes[2, 0].set_title("All Hits: Q vs X,Z")
     axes[2, 0].set_xlabel("X [mm]")
     axes[2, 0].set_ylabel("Z [mm]")
@@ -99,7 +101,7 @@ def display_event_cluster(df_reco_event):
         cluster_df = df_clustered_xz[df_clustered_xz['cluster'] == cl]
         color = color_sequence[-3] if cl == -1 else color_sequence[cl]
         label = 'Scattered' if cl == -1 else f'Cluster {cl}'
-        axes[2, 1].scatter(cluster_df['Z'],cluster_df['X'], s=12, marker='o', label=label, c=color)
+        axes[2, 1].scatter(cluster_df['Z'],cluster_df['X'], s=30, marker='o', label=label, c=color)
     axes[2, 1].set_title("Clustered Hits: Q vs X,Z")
     axes[2, 1].set_xlabel("Z [mm]")
     axes[2, 1].set_ylabel("X [mm]")
