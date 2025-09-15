@@ -99,7 +99,10 @@ def merge_hdfs_multi_reco_event(folderdata_list, event_list):
                     # Read the HDF5 dataset at the path '/DST/Events'
                     print("opening",file_path)
                     df = pd.read_hdf(file_path, '/RECO/Events')
+                    
+                    df = df.drop(columns = ['time','npeak','nsipm','Xrms','Yrms','Qc','Ec','track_id','Ep'])
                     df = df[df["event"].isin(event_list)]
+                    
                     dfs.append(df)
 
     # Concatenate all collected DataFrames into one
