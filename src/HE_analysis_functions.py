@@ -1,7 +1,9 @@
 import os
 import pandas as pd
 import numpy as np
+import math
 from sklearn.cluster import DBSCAN
+from scipy.interpolate import griddata
 
 module_dir = os.path.abspath('.')
 
@@ -9,6 +11,19 @@ from analysis_functions import MapPar
 import parser_fun as pf
 import analysis_functions as af
 
+
+
+def is_fully_contained(df, R=400):
+    def check_row(row):
+        corners = [
+            (row['X_min'], row['Y_min']),
+            (row['X_max'], row['Y_min']),
+            (row['X_max'], row['Y_max']),
+            (row['X_min'], row['Y_max']),
+        ]
+        return all(math.hypot(x, y) <= R for x, y in corners)
+
+    return df.apply(check_row, axis=1)
 
 
 def remove_scatter_and_reweight(df: pd.DataFrame) -> pd.DataFrame:
@@ -148,23 +163,26 @@ def clusterize_hits(df_pe_peak: pd.DataFrame, eps=2.3, npt=5)-> pd.DataFrame:
     return df_pe_peak
 
 
-def compute_cluster_stats(df: pd.DataFrame)-> pd.DataFrame:
+def compute_cluster_stats(df: pd.DataFrame) -> pd.DataFrame:
+    slice_cluster_stats = []
 
-    slice_cluster_stats=[]
-    
     for ev, df_ev in df.groupby('event'):
         z_bounds = df_ev.groupby('cluster')['Z'].agg(['min', 'max'])
         z_bounds['min'] -= 1
         z_bounds['max'] += 1
         z_slices = np.sort(np.unique(np.concatenate([z_bounds['min'].values, z_bounds['max'].values])))
-        
+
         for i in range(len(z_slices) - 1):
             z_low = z_slices[i]
             z_high = z_slices[i + 1]
             slice_df = df_ev[(df_ev['Z'] >= z_low) & (df_ev['Z'] <= z_high)]
-            
+
             for cluster_id, sub_df in slice_df.groupby('cluster'):
-                
+                # Compute radial distances for the points in this slice/cluster
+                distances = np.sqrt(sub_df['X']**2 + sub_df['Y']**2)
+                max_dist = distances.max()
+
+
                 stats = {
                     'event': ev,
                     'Z_min': z_low,
@@ -176,7 +194,8 @@ def compute_cluster_stats(df: pd.DataFrame)-> pd.DataFrame:
                     'X_max': df_ev[df_ev['cluster'] == cluster_id]['X'].max(),
                     'Y_mean': df_ev[df_ev['cluster'] == cluster_id]['Y'].mean(),
                     'Y_min': df_ev[df_ev['cluster'] == cluster_id]['Y'].min(),
-                    'Y_max': df_ev[df_ev['cluster'] == cluster_id]['Y'].max()
+                    'Y_max': df_ev[df_ev['cluster'] == cluster_id]['Y'].max(),
+                    'max_radial_dist': np.sqrt(df_ev[df_ev['cluster'] == cluster_id]['X']**2 + df_ev[df_ev['cluster'] == cluster_id]['Y']**2).max(),
                 }
                 slice_cluster_stats.append(stats)
 
@@ -184,11 +203,56 @@ def compute_cluster_stats(df: pd.DataFrame)-> pd.DataFrame:
 
     return df_slices_clustered
 
+
+
+def get_correction_map(krmap_filename):
+    """ return a function to correct the energy of this hits using (z, x, y) coordinates
+        the correction is based on a 3D map (GML)
+    """
+    krmap = pd.read_hdf(krmap_filename, "/krmap")
+    #meta  = pd.read_hdf(pathdata + “GML_krmap_combined.map3d”, “/mapmeta”)
+    dtxy_map   = krmap.loc[:, list("zxy")].values
+    factor_map = krmap.factor.values
+    def corr(dt, x, y, method="nearest"):
+        dtxy_data   = np.stack([dt, x, y], axis=1)
+        factor_data = griddata(dtxy_map, factor_map, dtxy_data, method=method)
+        return factor_data
+    return corr
+
+# Extending processing of the Sophornia hits
+#--------------------------------------
+def correct_hits_v2(hits : pd.DataFrame, krmap_filename : str, scale : float = 1., var : str = 'E'):
+    E = hits[var].values
+    X, Y, Z = hits.X.values, hits.Y.values, hits.Z.values
+    corrector = get_correction_map(krmap_filename)
+    Ec  = scale * E * corrector(Z, X, Y)
+    hits['Ec'] = Ec
+    
+    return hits
+
+
+def add_full_containment_flags(df: pd.DataFrame) -> pd.DataFrame:
+    # Helper to check full containment within radius, without creating R column
+    def fully_contained(radius):
+        return df.groupby(['event', 'cluster']).apply(
+            lambda g: np.all(np.sqrt(g['X']**2 + g['Y']**2) <= radius)
+        ).reset_index(name=f'is_fully_contained_{radius}')
+
+    # Compute containment flags
+    contained_200 = fully_contained(200)
+    contained_400 = fully_contained(400)
+
+    # Merge back into the original DataFrame
+    df = df.merge(contained_200, on=['event', 'cluster'])
+    df = df.merge(contained_400, on=['event', 'cluster'])
+
+    return df
+
+
 def preprocess_df_hits(folderlist: [str],
                        ev_list: [int],
                        path_to_kr_map: str)-> pd.DataFrame:
 
-    kr_map = af.load_kr_map(path_to_kr_map)
     print('recomended to pass 1 ldc per time in the list!! [../ldc1/,../ldc2,...]')
 
     dfs =[]
@@ -198,11 +262,17 @@ def preprocess_df_hits(folderlist: [str],
         df_pe_peak = pf.open_reco_event(a_folder,ev_list)
         df_pe_peak = df_pe_peak[(df_pe_peak['Z']>0) & (df_pe_peak['Z']<1500)]
 
+        print("dropping useless columns...")
+        df_pe_peak = df_pe_peak.drop(columns = ['time','npeak','nsipm','Xrms','Yrms','Qc','Ec','track_id','Ep'])
+        
         print("clustering...")
         df_pe_peak = clusterize_hits(df_pe_peak)
 
+        #print("removing hits and reweighting...")        
+        #df_pe_peak = remove_scatter_and_reweight(df_pe_peak)
+
         print("correcting hits...")
-        df_pe_peak = correct_Hits(df_pe_peak,kr_map)
+        df_pe_peak = correct_hits_v2(df_pe_peak, path_to_kr_map, var = "Erw")
 
         print("calculating stats...")
         df_pe_peak = compute_cluster_stats(df_pe_peak)
@@ -210,7 +280,6 @@ def preprocess_df_hits(folderlist: [str],
         dfs.append(df_pe_peak)
         
     return pd.concat(dfs, ignore_index=True)
-
 
 
 
