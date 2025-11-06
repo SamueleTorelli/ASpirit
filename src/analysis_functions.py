@@ -767,6 +767,34 @@ def gauss_seed(x, y, sigma_rel=0.05):
     amp   = y_max * np.sqrt(2 * np.pi) * sigma / dx  # Estimate Gaussian area amplitude
     return amp, x_max, sigma
 
+def gaussfl_seed(x, y, sigma_rel=0.01):
+    """
+    Estimate initial parameters (seed) for a Gaussian + flat term fit to 1D histogram data.
+
+    Parameters
+    ----------
+    x : np.array
+        Bin centers.
+    y : np.array
+        Bin counts (heights) corresponding to x.
+    sigma_rel : float, optional
+        Relative estimate of sigma as a fraction of peak x-value (default is 0.05).
+
+    Returns
+    -------
+    tuple
+        Seed tuple (amplitude, mean, sigma) suitable for Gaussian fitting.
+    """
+    i_min = np.argmin(y)
+    i_max = np.argmax(y)       # Index of peak bin
+    x_max = x[i_max]           # x at peak
+    y_max = y[i_max]           # y at peak
+    sigma = sigma_rel * x_max  # Estimate of standard deviation
+    dx    = np.diff(x)[0]      # Bin width (assumes uniform bins)
+    amp   = y_max * np.sqrt(2 * np.pi) * sigma / dx  # Estimate Gaussian area amplitude
+    C = y[i_min]
+    return amp, x_max, sigma, C
+
 
 def gaussian_parameters(x: np.array, xrange: Tuple[float, float], bin_size: float = 1) -> Tuple[float, float, float]:
     """
@@ -1253,6 +1281,9 @@ def chi2(f : FitFunction,
 
 def gaussian(y, A, mu, sigma):
     return A * np.exp(-(y - mu)**2 / (2 * sigma**2))
+
+def gaussianfl(y, A, mu, sigma, C):
+    return A * np.exp(-(y - mu)**2 / (2 * sigma**2)) + C
     
 
 
@@ -1374,6 +1405,84 @@ def gaussian_profiler_y_slices(counts, xedges, yedges, slices=10, min_counts=10)
             _, mu_fit, sigma_fit = popt
             mu_err = np.sqrt(np.diag(pcov))[1] if pcov.shape == (3, 3) else np.nan
             sigma_err = np.sqrt(np.diag(pcov))[2] if pcov.shape == (3, 3) else np.nan
+
+            center = 0.5 * (xlow + xhigh)
+            dt_centers.append(center)
+            mean_values.append(mu_fit)
+            mean_errors.append(mu_err)
+            sigma_vals.append(sigma_fit)
+            sigma_errors.append(sigma_err)
+            
+        except RuntimeError:
+            dt_centers.append(np.nan)
+            mean_values.append(np.nan)
+            mean_errors.append(np.nan)
+            sigma_vals.append(np.nan)
+            sigma_errors.append(np.nan)
+            continue
+        
+
+    return (np.array(dt_centers),
+            np.array(mean_values),
+            np.array(mean_errors),
+            np.array(sigma_vals),
+            np.array(sigma_errors))
+
+
+
+#Reimplementation with slice numbers 
+def gaussianfl_profiler_y_slices(counts, xedges, yedges, slices=10, min_counts=10):
+    """
+    Fit vertical slices of a 2D histogram with Gaussians+ a flat term along y-axis.
+
+    Parameters:
+        counts : 2D array
+            The 2D histogram counts.
+        xedges, yedges : arrays
+            Bin edges along x and y axes.
+        slices : int or array-like
+            Number of vertical slices or explicit x bin edges.
+        min_counts : int
+            Minimum counts in a slice to attempt a fit.
+
+    Returns:
+        dt_centers, mean_values, mean_errors, sigma_vals, sigma_errors
+    """
+
+    ycenters = (yedges[:-1] + yedges[1:]) / 2
+
+    # Determine slicing
+    if isinstance(slices, int):
+        # Uniform slicing over full x-range
+        custom_xedges = np.linspace(xedges[0], xedges[-1], slices + 1)
+    else:
+        # Use custom array of bin edges
+        custom_xedges = np.asarray(slices)
+
+    dt_centers = []
+    mean_values = []
+    mean_errors = []
+    sigma_vals = []
+    sigma_errors = []
+
+    for i in range(len(custom_xedges) - 1):
+        xlow, xhigh = custom_xedges[i], custom_xedges[i + 1]
+        # Find histogram bins overlapping this range
+        xmask = (xedges[:-1] >= xlow) & (xedges[1:] <= xhigh)
+        if not np.any(xmask):
+            continue
+
+        # Average counts over selected bins along x
+        profile = np.mean(counts[xmask, :], axis=0)
+
+        if np.sum(profile) < min_counts or np.all(profile == 0):
+            continue
+
+        try:
+            popt, pcov = curve_fit(gaussianfl, ycenters, profile, p0=gaussfl_seed(ycenters, profile))
+            _, mu_fit, sigma_fit, _ = popt
+            mu_err = np.sqrt(np.diag(pcov))[1] if pcov.shape == (4, 4) else np.nan
+            sigma_err = np.sqrt(np.diag(pcov))[2] if pcov.shape == (4, 4) else np.nan
 
             center = 0.5 * (xlow + xhigh)
             dt_centers.append(center)

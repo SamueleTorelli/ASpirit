@@ -51,6 +51,57 @@ def remove_scatter_and_reweight(df: pd.DataFrame) -> pd.DataFrame:
     df = df.drop(columns=['Eslice', 'Qsum'])      
     return df
 
+def remove_scatter_and_reweight_quadratically(df: pd.DataFrame) -> pd.DataFrame:
+
+    # Compute Eslice for each (event, Z)
+    eslice = df.groupby(['event', 'Z'])['E'].sum().rename("Eslice")
+    df = df.merge(eslice, on=['event', 'Z'])
+
+    # Mask for signal rows (cluster >= 0)
+    signal_mask = df['cluster'] >= 0
+    
+    # Compute Qsum for signal rows grouped by (event, Z)
+    qsum = df[signal_mask].assign(Q2=df["Q"]**2).groupby(['event', 'Z'])['Q2'].sum().rename("Qsquaresum")
+
+    # Merge Qsum back to original DataFrame; use left join to preserve all rows
+    df = df.merge(qsum, on=['event', 'Z'], how='left')
+
+    # Compute Erw only for signal rows
+    df['Erw'] = np.where(
+        signal_mask,
+        df['Eslice'] * df['Q']**2 / df['Qsquaresum'],
+        np.nan
+    )
+
+    df = df.drop(columns=['Eslice', 'Qsquaresum'])      
+    return df
+
+
+def apply_threshold_and_reweight(df: pd.DataFrame, thr: float) -> pd.DataFrame:
+
+    # Compute Eslice for each (event, Z)
+    eslice = df.groupby(['event', 'Z'])['E'].sum().rename("Eslice")
+    df = df.merge(eslice, on=['event', 'Z'])
+
+    # Mask for signal rows (cluster >= 0)
+    signal_mask = df['Q'] > thr
+
+    # Compute Qsum for signal rows grouped by (event, Z)
+    qsum = df[signal_mask].groupby(['event', 'Z'])['Q'].sum().rename("Qsum")
+
+    # Merge Qsum back to original DataFrame; use left join to preserve all rows
+    df = df.merge(qsum, on=['event', 'Z'], how='left')
+
+    # Compute Erw only for signal rows
+    df['Erw'] = np.where(
+        signal_mask,
+        df['Eslice'] * df['Q'] / df['Qsum'],
+        np.nan
+    )
+
+    df = df.drop(columns=['Eslice', 'Qsum'])      
+    return df
+
 
 def correct_Hits(
     df: pd.DataFrame,
@@ -172,6 +223,8 @@ def compute_cluster_stats(df: pd.DataFrame) -> pd.DataFrame:
         z_bounds['max'] += 1
         z_slices = np.sort(np.unique(np.concatenate([z_bounds['min'].values, z_bounds['max'].values])))
 
+        a_time = df_ev['time'].unique()[0]
+        
         for i in range(len(z_slices) - 1):
             z_low = z_slices[i]
             z_high = z_slices[i + 1]
@@ -185,6 +238,7 @@ def compute_cluster_stats(df: pd.DataFrame) -> pd.DataFrame:
 
                 stats = {
                     'event': ev,
+                    'time': a_time,
                     'Z_min': z_low,
                     'Z_max': z_high,
                     'cluster': cluster_id,
@@ -213,9 +267,9 @@ def get_correction_map(krmap_filename):
     #meta  = pd.read_hdf(pathdata + “GML_krmap_combined.map3d”, “/mapmeta”)
     dtxy_map   = krmap.loc[:, list("zxy")].values
     factor_map = krmap.factor.values
-    def corr(dt, x, y, method="nearest"):
+    def corr(dt, x, y, method=""):
         dtxy_data   = np.stack([dt, x, y], axis=1)
-        factor_data = griddata(dtxy_map, factor_map, dtxy_data, method=method)
+        factor_data = griddata(dtxy_map, factor_map, dtxy_data, method='nearest')
         return factor_data
     return corr
 
@@ -224,6 +278,25 @@ def get_correction_map(krmap_filename):
 def correct_hits_v2(hits : pd.DataFrame, krmap_filename : str, scale : float = 1., var : str = 'E'):
     E = hits[var].values
     X, Y, Z = hits.X.values, hits.Y.values, hits.Z.values
+    corrector = get_correction_map(krmap_filename)
+    Ec  = scale * E * corrector(Z, X, Y)
+    hits['Ec'] = Ec
+    
+    return hits
+
+# Extending processing of the Sophornia hits
+#--------------------------------------
+def correct_hits_v2_photoelectric(hits : pd.DataFrame, krmap_filename : str, scale : float = 1., var : str = 'E'):
+
+    """
+    Apply the correction under the interpretation that the spurious hits are photoelectric effect and thus have Z=0 
+    """
+    
+    E = hits[var].values
+    X, Y, Z = hits.X.values, hits.Y.values, hits.Z.values
+    cluster = hits.cluster.values
+    Z = np.where(cluster == -1, 50, Z)
+    
     corrector = get_correction_map(krmap_filename)
     Ec  = scale * E * corrector(Z, X, Y)
     hits['Ec'] = Ec
@@ -263,14 +336,15 @@ def preprocess_df_hits(folderlist: [str],
         df_pe_peak = df_pe_peak[(df_pe_peak['Z']>0) & (df_pe_peak['Z']<1500)]
 
         print("dropping useless columns...")
-        df_pe_peak = df_pe_peak.drop(columns = ['time','npeak','nsipm','Xrms','Yrms','Qc','Ec','track_id','Ep'])
+        df_pe_peak = df_pe_peak.drop(columns = ['npeak','nsipm','Xrms','Yrms','Qc','Ec','track_id','Ep'])
         
         print("clustering...")
         df_pe_peak = clusterize_hits(df_pe_peak)
 
-        #print("removing hits and reweighting...")        
-        #df_pe_peak = remove_scatter_and_reweight(df_pe_peak)
-
+        print("removing hits and reweighting...")        
+        df_pe_peak = remove_scatter_and_reweight_quadratically(df_pe_peak)
+        #df_pe_peak = apply_threshold_and_reweight(df_pe_peak,7.5)
+        
         print("correcting hits...")
         df_pe_peak = correct_hits_v2(df_pe_peak, path_to_kr_map, var = "Erw")
 
