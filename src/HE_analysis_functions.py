@@ -264,10 +264,10 @@ def get_correction_map(krmap_filename):
         the correction is based on a 3D map (GML)
     """
     krmap = pd.read_hdf(krmap_filename, "/krmap")
-    #meta  = pd.read_hdf(pathdata + “GML_krmap_combined.map3d”, “/mapmeta”)
+
     dtxy_map   = krmap.loc[:, list("zxy")].values
     factor_map = krmap.factor.values
-    def corr(dt, x, y, method=""):
+    def corr(dt, x, y, method="linear"):
         dtxy_data   = np.stack([dt, x, y], axis=1)
         factor_data = griddata(dtxy_map, factor_map, dtxy_data, method='nearest')
         return factor_data
