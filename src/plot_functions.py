@@ -1,6 +1,8 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Wedge, Arc
+import plotly.graph_objects as go
+import plotly.io as pio
 
 from cycler     import cycler
 from contextlib import contextmanager
@@ -139,3 +141,40 @@ def plot_circular_sectors(sector_angle, radial_bins_per_sector, radius=480, cent
     plt.show()
 
 
+def plot_3D_points_with_Q(df):
+    # Extract arrays
+    x = df["X"].to_numpy()
+    y = df["Y"].to_numpy()
+    z = df["Z"].to_numpy()
+    Q = df["Q"].to_numpy()
+
+    # Interactive plot
+    pio.renderers.default = "notebook_connected"
+
+    fig = go.Figure()
+
+    # 3D scatter with Q
+    fig.add_trace(go.Scatter3d(
+        x=x, y=y, z=z,
+        mode='markers',
+        marker=dict(
+            size=3,
+            color=Q,          # color by Q
+            colorscale='Viridis',
+            colorbar=dict(title="Q"),
+        ),
+        name='Points (colored by Q)'
+    ))
+
+    fig.update_layout(
+        scene=dict(
+            xaxis_title='X',
+            yaxis_title='Y',
+            zaxis_title='Z'
+        ),
+        width=900,
+        height=700,
+        showlegend=True
+    )
+
+    fig.show()
