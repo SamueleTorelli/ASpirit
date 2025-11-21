@@ -141,7 +141,22 @@ def plot_circular_sectors(sector_angle, radial_bins_per_sector, radius=480, cent
     plt.show()
 
 
-def plot_3D_points_with_Q(df):
+def plot_3D_points_with_Q(df, primary_path_points=None, extreme_points=None, true_points=None, sphere_radius=0.5, title = None ):
+    """
+    Plots 3D points colored by Q and optionally overlays a primary path and transparent spheres
+    around two extreme points.
+    
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Must contain columns 'X', 'Y', 'Z', 'Q'.
+    primary_path_points : np.ndarray, optional
+        Array of shape (N,3) containing 3D points along the primary path.
+    extreme_points : tuple of np.ndarray, optional
+        Tuple (pt1, pt2) of 3D coordinates. If provided, draw spheres around them.
+    sphere_radius : float
+        Radius of the spheres around extreme points.
+    """
     # Extract arrays
     x = df["X"].to_numpy()
     y = df["Y"].to_numpy()
@@ -149,22 +164,55 @@ def plot_3D_points_with_Q(df):
     Q = df["Q"].to_numpy()
 
     # Interactive plot
-    pio.renderers.default = "notebook_connected"
-
+    pio.renderers.default = "browser"
     fig = go.Figure()
 
     # 3D scatter with Q
     fig.add_trace(go.Scatter3d(
         x=x, y=y, z=z,
         mode='markers',
-        marker=dict(
-            size=3,
-            color=Q,          # color by Q
-            colorscale='Viridis',
-            colorbar=dict(title="Q"),
-        ),
-        name='Points (colored by Q)'
+        marker=dict(size=5, color=Q, colorscale='Viridis', colorbar=dict(title="Q")),
     ))
+
+    # Plot primary path if provided
+    if primary_path_points is not None:
+        fig.add_trace(go.Scatter3d(
+            x=primary_path_points[:, 0],
+            y=primary_path_points[:, 1],
+            z=primary_path_points[:, 2],
+            mode='lines',
+            line=dict(color='red', width=5),
+        ))
+
+    # Plot spheres and black markers if extreme points provided
+    if extreme_points is not None:
+
+        pt1, pt2 = extreme_points
+        
+        add_spheres_to_fig(fig, points=(pt1, pt2), radius=sphere_radius, colors=['orange','magenta'], opacity=0.2)
+
+        # Black markers at extreme points
+        fig.add_trace(go.Scatter3d(
+            x=[pt1[0], pt2[0]],
+            y=[pt1[1], pt2[1]],
+            z=[pt1[2], pt2[2]],
+            mode='markers',
+            marker=dict(size=6, color='black', symbol='diamond'),
+        ))
+    
+    # Plot spheres and black markers if extreme points provided
+    if true_points is not None:
+
+        pt1, pt2 = true_points
+        
+        # Black markers at extreme points
+        fig.add_trace(go.Scatter3d(
+            x=[pt1[0], pt2[0]],
+            y=[pt1[1], pt2[1]],
+            z=[pt1[2], pt2[2]],
+            mode='markers',
+            marker=dict(size=6, color='black', symbol='cross'),
+        ))
 
     fig.update_layout(
         scene=dict(
@@ -172,9 +220,113 @@ def plot_3D_points_with_Q(df):
             yaxis_title='Y',
             zaxis_title='Z'
         ),
-        width=900,
-        height=700,
-        showlegend=True
+        width=1200,
+        height=900,
+        title=title
+    )
+
+    fig.show()
+
+
+def add_spheres_to_fig(fig, points, radius=0.5, colors=None, opacity=0.2):
+    """
+    Add smooth transparent spheres at specified points to a Plotly 3D figure.
+    
+    Parameters
+    ----------
+    fig : go.Figure
+        The existing figure to which spheres will be added.
+    points : list or array of shape (N,3)
+        List of 3D points for sphere centers.
+    radius : float
+        Radius of spheres.
+    colors : list of str
+        Colors for each sphere.
+    opacity : float
+        Transparency (0-1).
+    """
+
+    # Create spherical coordinates: phi (polar angle 0 to π) and theta (azimuthal 0 to 2π)
+    phi = np.linspace(0, np.pi, 20)
+    theta = np.linspace(0, 2*np.pi, 40)
+    phi, theta = np.meshgrid(phi, theta)
+    
+    # Generate sphere surface coordinates (unit sphere)
+    x_sphere = np.sin(phi) * np.cos(theta)
+    y_sphere = np.sin(phi) * np.sin(theta)
+    z_sphere = np.cos(phi)
+    
+    for idx, center in enumerate(points):
+        # Translate sphere to center position and scale by radius
+        x = center[0] + radius * x_sphere
+        y = center[1] + radius * y_sphere
+        z = center[2] + radius * z_sphere
+        
+        # Use Surface for proper parametric surface rendering
+        sphere_color = colors[idx] if colors else 'blue'
+        fig.add_trace(go.Surface(
+            x=x,
+            y=y,
+            z=z,
+            surfacecolor=np.ones_like(z),  # Uniform surface
+            colorscale=[[0, sphere_color], [1, sphere_color]],
+            showscale=False,
+            opacity=opacity,
+            name=f'Sphere {idx+1}'
+        ))
+
+
+def plot_3D_points_with_ori_track(df, other_df=None, title=None):
+    """
+    Plots 3D points colored by Q from df and optionally adds points from another dataframe.
+    
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Must contain columns 'X', 'Y', 'Z', 'Q'.
+    other_df : pandas.DataFrame, optional
+        DataFrame with columns 'x', 'y', 'z' to plot as additional points.
+    title : str, optional
+        Title for the plot.
+    """
+    # Extract arrays from main df
+    x = df["X"].to_numpy()
+    y = df["Y"].to_numpy()
+    z = df["Z"].to_numpy()
+    Q = df["Q"].to_numpy()
+
+    # Interactive plot
+    pio.renderers.default = "browser"
+    fig = go.Figure()
+
+    # 3D scatter with Q
+    fig.add_trace(go.Scatter3d(
+        x=x, y=y, z=z,
+        mode='markers',
+        marker=dict(size=5, color=Q, colorscale='Viridis', colorbar=dict(title="Q")),
+    ))
+
+    # Plot points from other_df if provided
+    if other_df is not None:
+        x_other = other_df["x"].to_numpy()
+        y_other = other_df["y"].to_numpy()
+        z_other = other_df["z"].to_numpy()
+        
+        fig.add_trace(go.Scatter3d(
+            x=x_other, y=y_other, z=z_other,
+            mode='markers',
+            marker=dict(size=5, color='red'),
+        ))
+
+    fig.update_layout(
+        scene=dict(
+            xaxis_title='X',
+            yaxis_title='Y',
+            zaxis_title='Z'
+        ),
+        width=1200,
+        height=900,
+        title=title
     )
 
     fig.show()
