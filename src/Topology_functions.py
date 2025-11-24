@@ -27,7 +27,7 @@ def compute_primary_path(df):
 
     # --- 3. Compute all pairs shortest paths ---
     lengths = dict(nx.all_pairs_dijkstra_path_length(G))
-    paths = dict(nx.all_pairs_dijkstra_path(G, weight='distance'))
+    paths = dict(nx.all_pairs_dijkstra_path(G))
 
     # --- 4. Find all paths with maximum length ---
     max_len = 0
@@ -35,11 +35,11 @@ def compute_primary_path(df):
     for i in lengths:
         for j in lengths[i]:
             l = lengths[i][j]
-            if l > max_len:
-                max_len = l
-                max_paths = [paths[i][j]]
-            elif l == max_len:
-                max_paths.append(paths[i][j])
+            #if l > max_len:
+            max_len = l
+            max_paths = [paths[i][j]]
+            #elif l == max_len:
+            #    max_paths.append(paths[i][j])
 
     # --- 5. If multiple, choose path with minimum deflection ---
     def compute_deflection(path_pts):
@@ -298,3 +298,147 @@ def remove_isolated_points(df, radius=1.2):
     # Return only points that are not isolated
     return df[mask].copy()
 
+
+
+def prune_edges(df, distance_threshold=1.5):
+    """
+    Iteratively remove edge points without breaking connectivity.
+    
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Must have columns ['X','Y','Z','Q'].
+    distance_threshold : float
+        Maximum distance to consider points as neighbors.
+        
+    Returns
+    -------
+    pd.DataFrame
+        Pruned DataFrame.
+    """
+    # Copy input
+    df_pruned = df.copy()
+    
+    # Build k-d tree for neighbors
+    coords = df_pruned[['X','Y','Z']].values
+    tree = cKDTree(coords)
+    
+    # Build graph: edges between points within distance_threshold
+    G = nx.Graph()
+    for i, coord in enumerate(coords):
+        neighbors = tree.query_ball_point(coord, r=distance_threshold)
+        for j in neighbors:
+            if i != j:
+                G.add_edge(i, j)
+    
+    # Function to check if a node is a boundary (has less than max neighbors)
+    def is_edge_node(node):
+        return len(list(G.neighbors(node))) < 6  # heuristic
+    
+    # Iteratively remove edge nodes if connectivity is preserved
+    nodes_to_check = list(G.nodes)
+    while True:
+        removed_any = False
+        for node in nodes_to_check:
+            if node not in G:
+                continue
+            if is_edge_node(node):
+                # Remove node and check connectivity
+                G.remove_node(node)
+                if nx.is_connected(G):
+                    removed_any = True
+                else:
+                    # Restore
+                    G.add_node(node)
+                    # Reconnect edges
+                    coord = coords[node]
+                    neighbors = tree.query_ball_point(coord, r=distance_threshold)
+                    for j in neighbors:
+                        if j != node and j in G:
+                            G.add_edge(node, j)
+        if not removed_any:
+            break
+    
+    # Return pruned DataFrame
+    remaining_indices = list(G.nodes)
+    return df_pruned.iloc[remaining_indices].reset_index(drop=True)
+
+
+def skeletonize_point_cloud_from_df(df, Q=None,distance_threshold=2.0, min_degree=1):
+    """
+    Skeletonize 3D point cloud from a dataframe with columns ['X','Y','Z','Q'].
+    """
+    coords = df[['X','Y','Z']].to_numpy()
+    Q = df['Q'].to_numpy() if 'Q' in df.columns else None
+    
+    N = len(coords)
+    G = nx.Graph()
+    
+    # Add nodes with indices 0..N-1
+    for i in range(N):
+        G.add_node(i, pos=coords[i], Q=Q[i] if Q is not None else 1.0)
+    
+    # Build KD-tree
+    tree = cKDTree(coords)
+    
+    for i, pt in enumerate(coords):
+        # Use k=10 nearest neighbors instead of radius for more control
+        distances, indices = tree.query(pt, k=10)
+        for dist, j in zip(distances, indices):
+            if i >= j or dist > distance_threshold:
+                continue
+            weight = dist #/ (G.nodes[i]['Q'] + G.nodes[j]['Q'])
+            G.add_edge(i, j, weight=weight)
+    
+    # Extremities and shortest paths (same as before)
+    extremities = [n for n in G.nodes if G.degree[n] <= min_degree]
+    if len(extremities) < 2:
+        extremities = list(G.nodes)
+    
+    skeleton_edges = set()
+    for i, src in enumerate(extremities):
+        for dst in extremities[i+1:]:
+            try:
+                path = nx.shortest_path(G, source=src, target=dst, weight='weight')
+                skeleton_edges.update([(path[k], path[k+1]) for k in range(len(path)-1)])
+            except nx.NetworkXNoPath:
+                continue
+    
+    G_skel = nx.Graph()
+    G_skel.add_nodes_from(range(N))
+    G_skel.add_edges_from(skeleton_edges)
+
+  
+    """
+    # Optional pruning leaves
+    while True:
+        leaves = [n for n in G_skel.nodes if G_skel.degree[n] == 1]
+        if not leaves:
+            break
+        G_skel.remove_nodes_from(leaves)
+    """
+    skeleton_nodes = coords[list(G_skel.nodes)]
+    skeleton_edges = list(G_skel.edges)
+    
+    return skeleton_nodes, skeleton_edges
+
+def filter_points(filtered_nodes, max_distance=5.0):
+    """
+    Filter consecutive points in ordered array - remove point if it's too far from previous point
+    """
+    if len(filtered_nodes) == 0:
+        return filtered_nodes
+    
+    filtered_result = [filtered_nodes[0]]  # Always keep first point
+    
+    for i in range(1, len(filtered_nodes)):
+        current_point = filtered_nodes[i]
+        previous_point = filtered_result[-1]  # Last point we kept
+        
+        dist = np.linalg.norm(current_point - previous_point)
+        
+        if dist <= max_distance:
+            filtered_result.append(current_point)
+        # else: skip this point (don't add it to filtered_result)
+    
+    return np.array(filtered_result)
