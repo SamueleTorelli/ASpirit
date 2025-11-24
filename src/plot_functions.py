@@ -141,7 +141,7 @@ def plot_circular_sectors(sector_angle, radial_bins_per_sector, radius=480, cent
     plt.show()
 
 
-def plot_3D_points_with_Q(df, primary_path_points=None, extreme_points=None, true_points=None, sphere_radius=0.5, title = None ):
+def plot_3D_points_with_Q(df, primary_path_points=None, extreme_points=None, true_points=None, ellipse_size=None,title = None ):
     """
     Plots 3D points colored by Q and optionally overlays a primary path and transparent spheres
     around two extreme points.
@@ -189,7 +189,7 @@ def plot_3D_points_with_Q(df, primary_path_points=None, extreme_points=None, tru
 
         pt1, pt2 = extreme_points
         
-        add_spheres_to_fig(fig, points=(pt1, pt2), radius=sphere_radius, colors=['orange','magenta'], opacity=0.2)
+        add_spheres_to_fig(fig, points=(pt1, pt2), a=ellipse_size[0], b=ellipse_size[1], colors=['orange','magenta'], opacity=0.2)
 
         # Black markers at extreme points
         fig.add_trace(go.Scatter3d(
@@ -228,20 +228,23 @@ def plot_3D_points_with_Q(df, primary_path_points=None, extreme_points=None, tru
     fig.show()
 
 
-def add_spheres_to_fig(fig, points, radius=0.5, colors=None, opacity=0.2):
+
+def add_spheres_to_fig(fig, points, a=0.5, b=0.5, colors=None, opacity=0.2):
     """
-    Add smooth transparent spheres at specified points to a Plotly 3D figure.
+    Add smooth transparent ellipsoids at specified points to a Plotly 3D figure.
     
     Parameters
     ----------
     fig : go.Figure
-        The existing figure to which spheres will be added.
+        The existing figure to which ellipsoids will be added.
     points : list or array of shape (N,3)
-        List of 3D points for sphere centers.
-    radius : float
-        Radius of spheres.
+        List of 3D points for ellipsoid centers.
+    a : float
+        Longer axis along Z direction.
+    b : float
+        Shorter axis along XY plane.
     colors : list of str
-        Colors for each sphere.
+        Colors for each ellipsoid.
     opacity : float
         Transparency (0-1).
     """
@@ -251,16 +254,16 @@ def add_spheres_to_fig(fig, points, radius=0.5, colors=None, opacity=0.2):
     theta = np.linspace(0, 2*np.pi, 40)
     phi, theta = np.meshgrid(phi, theta)
     
-    # Generate sphere surface coordinates (unit sphere)
+    # Generate ellipsoid surface coordinates (unit sphere scaled to ellipsoid)
     x_sphere = np.sin(phi) * np.cos(theta)
     y_sphere = np.sin(phi) * np.sin(theta)
     z_sphere = np.cos(phi)
     
     for idx, center in enumerate(points):
-        # Translate sphere to center position and scale by radius
-        x = center[0] + radius * x_sphere
-        y = center[1] + radius * y_sphere
-        z = center[2] + radius * z_sphere
+        # Translate ellipsoid to center position and scale by a (Z) and b (XY)
+        x = center[0] + b * x_sphere
+        y = center[1] + b * y_sphere
+        z = center[2] + a * z_sphere
         
         # Use Surface for proper parametric surface rendering
         sphere_color = colors[idx] if colors else 'blue'
