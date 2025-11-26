@@ -6,7 +6,7 @@ from scipy.spatial import cKDTree
 from scipy.spatial.distance import pdist, squareform
 
 
-def compute_primary_path(df):
+def compute_primary_path(df, thresh):
     """
     Computes the 'primary path' of a set of 3D points:
     - longest among all shortest paths in the MST
@@ -16,6 +16,7 @@ def compute_primary_path(df):
     
     # --- 1. Compute MST ---
     D = distance_matrix(points, points)
+    D[D > thresh] = 999
     mst = minimum_spanning_tree(D).toarray()
 
     # --- 2. Build graph ---
@@ -74,6 +75,50 @@ def compute_primary_path(df):
     # --- 6. Return ---
     primary_path_points = points[best_path]
     return primary_path_points, max_len
+
+
+def compute_primary_path_fast(df, thresh):
+    """
+    Compute the centerline through a 3D point cloud using:
+    1. Minimum Spanning Tree (MST)
+    2. Tree diameter (two-pass Dijkstra)
+    
+    Returns:
+        path_indices: ordered list of indices along the best path
+        length: total geodesic length of the path
+        endpoints: (start_node, end_node)
+    """
+
+    points = df[['X', 'Y', 'Z']].to_numpy()
+    
+    # --- 1. Distance matrix ----
+    D = distance_matrix(points, points)
+    D[D > thresh] = 999
+
+    # --- 2. Compute MST ----
+    mst = minimum_spanning_tree(D).toarray()
+
+    # --- 3. Build graph from MST ----
+    G = nx.Graph()
+    N = len(points)
+    for i in range(N):
+        for j in range(N):
+            if mst[i, j] > 0:
+                G.add_edge(i, j, weight=mst[i, j])
+
+    # --- 4. First Dijkstra: from arbitrary node (0) to find farthest node A ---
+    lengths_0 = nx.single_source_dijkstra_path_length(G, 0)
+    A = max(lengths_0, key=lengths_0.get)
+
+    # --- 5. Second Dijkstra: from A to find farthest node B (diameter endpoint) ---
+    lengths_A, paths_A = nx.single_source_dijkstra(G, A)
+    B = max(lengths_A, key=lengths_A.get)
+
+    # --- 6. The diameter path is the path from A to B ---
+    best_path = paths_A[B]
+    best_length = lengths_A[B]
+
+    return df[['X', 'Y', 'Z']].to_numpy()[best_path]
 
 
 def compute_primary_path_q_weigth(df):
