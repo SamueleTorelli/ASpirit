@@ -32,14 +32,16 @@ def compute_primary_path(df):
     # --- 4. Find all paths with maximum length ---
     max_len = 0
     max_paths = []
+
     for i in lengths:
         for j in lengths[i]:
             l = lengths[i][j]
-            #if l > max_len:
-            max_len = l
-            max_paths = [paths[i][j]]
-            #elif l == max_len:
-            #    max_paths.append(paths[i][j])
+
+            if l > max_len:
+                max_len = l
+                max_paths = [paths[i][j]]
+            elif l == max_len:
+                max_paths.append(paths[i][j])
 
     # --- 5. If multiple, choose path with minimum deflection ---
     def compute_deflection(path_pts):
@@ -155,8 +157,6 @@ def compute_primary_path_q_weigth(df):
     return primary_path_points, max_len
 
 
-
-
 def reconstruct_path(df, primary_path_points, radius=40):
     """
     Smooth the primary path by replacing each point with the Q-weighted centroid
@@ -191,6 +191,54 @@ def reconstruct_path(df, primary_path_points, radius=40):
             smoothed_path.append(p)
         else:
             # Energy-weighted centroid
+            local_pts = pts[idx]
+            local_Q = Q[idx]
+            centroid = np.average(local_pts, axis=0, weights=local_Q)
+            smoothed_path.append(centroid)
+
+    return np.array(smoothed_path)
+
+
+def reconstruct_path_ellipse(df, primary_path_points, ellipse_size):
+    """
+    Smooth the primary path by replacing each point with the Q-weighted centroid
+    of points inside an ellipsoidal neighborhood (axis `a` along Z, `b` on X/Y).
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Must contain columns 'X', 'Y', 'Z', 'Q'.
+    primary_path_points : np.ndarray
+        Array of shape (N,3) containing points along the primary path.
+    a : float
+        Semi-axis of the ellipsoid along Z.
+    b : float
+        Semi-axis of the ellipsoid along X and Y (assumed equal for both).
+
+    Returns
+    -------
+    reconstructed_path : np.ndarray
+        Smoothed path points (N,3).
+    """
+    # Build KDTree in scaled coordinate system so ellipsoid check becomes spherical
+    pts = df[['X', 'Y', 'Z']].to_numpy()
+    Q = df['Q'].to_numpy()
+
+    a=ellipse_size[0]
+    b=ellipse_size[1]
+
+    scaled_pts = np.column_stack((pts[:, 0] / b, pts[:, 1] / b, pts[:, 2] / a))
+    tree = cKDTree(scaled_pts)
+
+    smoothed_path = []
+
+    for p in primary_path_points:
+        scaled_p = np.array([p[0] / b, p[1] / b, p[2] / a])
+        # radius 1 in scaled space corresponds to ellipsoid in original space
+        idx = tree.query_ball_point(scaled_p, 1.0)
+        if len(idx) == 0:
+            smoothed_path.append(p)
+        else:
             local_pts = pts[idx]
             local_Q = Q[idx]
             centroid = np.average(local_pts, axis=0, weights=local_Q)
@@ -299,7 +347,6 @@ def remove_isolated_points(df, radius=1.2):
     return df[mask].copy()
 
 
-
 def prune_edges(df, distance_threshold=1.5):
     """
     Iteratively remove edge points without breaking connectivity.
@@ -364,7 +411,7 @@ def prune_edges(df, distance_threshold=1.5):
     return df_pruned.iloc[remaining_indices].reset_index(drop=True)
 
 
-def skeletonize_point_cloud_from_df(df, Q=None,distance_threshold=2.0, min_degree=1):
+def skeletonize_point_cloud_from_df(df, distance_threshold=2.0, min_degree=1):
     """
     Skeletonize 3D point cloud from a dataframe with columns ['X','Y','Z','Q'].
     """
@@ -373,23 +420,23 @@ def skeletonize_point_cloud_from_df(df, Q=None,distance_threshold=2.0, min_degre
     
     N = len(coords)
     G = nx.Graph()
-    
+
     # Add nodes with indices 0..N-1
     for i in range(N):
         G.add_node(i, pos=coords[i], Q=Q[i] if Q is not None else 1.0)
-    
+
     # Build KD-tree
     tree = cKDTree(coords)
-    
+
     for i, pt in enumerate(coords):
-        # Use k=10 nearest neighbors instead of radius for more control
-        distances, indices = tree.query(pt, k=10)
-        for dist, j in zip(distances, indices):
-            if i >= j or dist > distance_threshold:
+        neighbors = tree.query_ball_point(pt, r=distance_threshold)
+        for j in neighbors:
+            if i >= j:
                 continue
+            dist = np.linalg.norm(pt - coords[j])
             weight = dist #/ (G.nodes[i]['Q'] + G.nodes[j]['Q'])
             G.add_edge(i, j, weight=weight)
-    
+
     # Extremities and shortest paths (same as before)
     extremities = [n for n in G.nodes if G.degree[n] <= min_degree]
     if len(extremities) < 2:
@@ -399,7 +446,7 @@ def skeletonize_point_cloud_from_df(df, Q=None,distance_threshold=2.0, min_degre
     for i, src in enumerate(extremities):
         for dst in extremities[i+1:]:
             try:
-                path = nx.shortest_path(G, source=src, target=dst, weight='weight')
+                path = nx.shortest_path(G, source=src, target=dst, weight='distance')
                 skeleton_edges.update([(path[k], path[k+1]) for k in range(len(path)-1)])
             except nx.NetworkXNoPath:
                 continue
@@ -407,20 +454,19 @@ def skeletonize_point_cloud_from_df(df, Q=None,distance_threshold=2.0, min_degre
     G_skel = nx.Graph()
     G_skel.add_nodes_from(range(N))
     G_skel.add_edges_from(skeleton_edges)
-
-  
-    """
+    
     # Optional pruning leaves
     while True:
         leaves = [n for n in G_skel.nodes if G_skel.degree[n] == 1]
         if not leaves:
             break
         G_skel.remove_nodes_from(leaves)
-    """
+    
     skeleton_nodes = coords[list(G_skel.nodes)]
     skeleton_edges = list(G_skel.edges)
     
     return skeleton_nodes, skeleton_edges
+
 
 def filter_points(filtered_nodes, max_distance=5.0):
     """
@@ -442,3 +488,205 @@ def filter_points(filtered_nodes, max_distance=5.0):
         # else: skip this point (don't add it to filtered_result)
     
     return np.array(filtered_result)
+
+
+def sort_skeleton_points(skeleton_nodes, skeleton_edges):
+    """
+    Sort skeleton points in order between the two extremities
+    """
+    if len(skeleton_nodes) == 0:
+        return skeleton_nodes
+    
+    # Create graph from skeleton
+    G = nx.Graph()
+    for i in range(len(skeleton_nodes)):
+        G.add_node(i, pos=skeleton_nodes[i])
+    G.add_edges_from(skeleton_edges)
+    
+    # Find extremities (degree 1 nodes)
+    extremities = [n for n in G.nodes if G.degree(n) == 1]
+    
+    if len(extremities) != 2:
+        # If not exactly 2 extremities, can't sort linearly
+        return skeleton_nodes
+    
+    # Find path between the two extremities
+    start, end = extremities[0], extremities[1]
+    path = nx.shortest_path(G, source=start, target=end)
+    
+    # Return nodes in order along the path
+    sorted_nodes = np.array([skeleton_nodes[i] for i in path])
+    return sorted_nodes
+
+# Usage:
+#skeleton_nodes, skeleton_edges = skeletonize_point_cloud_from_df(df, distance_threshold=2.0)
+#sorted_skeleton = sort_skeleton_points(skeleton_nodes, skeleton_edges)
+
+
+def skeletonize_point_cloud_from_dfV2(df, distance_threshold=2.0, min_degree=1):
+    """
+    Skeletonize 3D point cloud from a dataframe with columns ['X','Y','Z','Q'].
+    Only connects points whose pairwise distance <= distance_threshold.
+    """
+    coords = df[['X','Y','Z']].to_numpy()
+    Q = df['Q'].to_numpy() if 'Q' in df.columns else None
+    
+    N = len(coords)
+    G = nx.Graph()
+
+    # Add nodes
+    for i in range(N):
+        G.add_node(i, pos=coords[i], Q=Q[i] if Q is not None else 1.0)
+
+    # Build KD-tree
+    tree = cKDTree(coords)
+
+    # Build graph with hard distance cutoff
+    for i, pt in enumerate(coords):
+        neighbors = tree.query_ball_point(pt, r=distance_threshold)
+        for j in neighbors:
+            if i >= j:
+                continue
+            dist = np.linalg.norm(pt - coords[j])
+            if dist <= distance_threshold:           # <-- strict local threshold
+                G.add_edge(i, j, weight=dist)        # attribute name: 'weight'
+
+    # Extremities
+    extremities = [n for n in G.nodes if G.degree[n] <= min_degree]
+    if len(extremities) < 2:
+        extremities = list(G.nodes)
+
+    skeleton_edges = set()
+
+    # Shortest paths between extremities using correct weight
+    for i, src in enumerate(extremities):
+        for dst in extremities[i+1:]:
+            max_endpoint_distance = 3.0  # or whatever
+            if np.linalg.norm(coords[src] - coords[dst]) > max_endpoint_distance:
+                continue
+            try:
+                path = nx.shortest_path(G, source=src, target=dst, weight='weight')
+                # add all edges of the path, they are already <= distance_threshold
+                for k in range(len(path) - 1):
+                    u, v = path[k], path[k+1]
+                    # optional: safety check (should always pass)
+                    if G[u][v]['weight'] <= distance_threshold:
+                        skeleton_edges.add((u, v))
+            except nx.NetworkXNoPath:
+                continue
+
+    # Build skeleton graph
+    G_skel = nx.Graph()
+    G_skel.add_nodes_from(range(N))
+    G_skel.add_edges_from(skeleton_edges)
+
+    # Optional: prune leaves iteratively
+    #while True:
+    #    leaves = [n for n in G_skel.nodes if G_skel.degree[n] == 1]
+    #    if not leaves:
+    #        break
+    #    G_skel.remove_nodes_from(leaves)
+
+    skeleton_nodes = coords[list(G_skel.nodes)]
+    skeleton_edges = list(G_skel.edges)
+
+    return skeleton_nodes, skeleton_edges
+
+
+def order_points_longest_greedy(points):
+    """
+    Sort points by:
+      1) finding the pair of points with maximal Euclidean distance
+      2) starting from one endpoint
+      3) repeatedly choosing the nearest unused point
+
+    Returns:
+        ordered_points: array of shape (N, 3)
+        order_indices : list of indices in the order visited
+    """
+    pts = np.asarray(points)
+    N = len(pts)
+
+    # ---- 1. Find the farthest pair (A, B) ----
+    D = np.linalg.norm(pts[:,None,:] - pts[None,:,:], axis=2)
+    A, B = np.unravel_index(np.argmax(D), D.shape)
+
+    # ---- 2. Greedy nearest-neighbor walk from A ----
+    unused = set(range(N))
+    unused.remove(A)
+
+    order = [A]
+    current = A
+
+    while unused:
+        # find nearest unused point
+        next_idx = min(unused, key=lambda j: np.linalg.norm(pts[current] - pts[j]))
+        order.append(next_idx)
+        unused.remove(next_idx)
+        current = next_idx
+
+    # ---- 3. Ensure the path ends at the farthest point B ----
+    if order[-1] != B:
+        order.reverse()
+
+    return pts[order]
+
+
+from skimage.morphology import skeletonize
+def skeleton_voxel_coordinates(hist_bins, edges_x, edges_y, edges_z):
+    """
+    hist_bins: boolean 3D histogram (Nx, Ny, Nz) or any shape
+    edges_x, edges_y, edges_z: histogram bin edges
+    """
+
+    # 1. Reorder for skimage (Z, Y, X)
+    volume = hist_bins.transpose(2, 1, 0)
+
+    # 2. Skeleton
+    skel = skeletonize(volume, method='lee')
+
+    # 3. Get voxel indices
+    z_idx, y_idx, x_idx = np.where(skel)
+
+    # 4. Compute bin centers
+    xs = 0.5 * (edges_x[:-1] + edges_x[1:])
+    ys = 0.5 * (edges_y[:-1] + edges_y[1:])
+    zs = 0.5 * (edges_z[:-1] + edges_z[1:])
+
+    # 5. Convert voxel indices → real coordinates
+    X = xs[x_idx]
+    Y = ys[y_idx]
+    Z = zs[z_idx]
+
+    # Stack
+    coords = np.vstack([X, Y, Z]).T
+
+    return coords
+
+def skeleton_voxel_coordinates2D(hist_bins, edges_x, edges_y):
+    """
+    hist_bins: boolean 2D histogram (Nx, Ny)
+    edges_x, edges_y: histogram bin edges
+    """
+
+    # 1. Reorder for skimage (Y, X)
+    volume = hist_bins.transpose(1, 0)
+
+    # 2. Skeleton
+    skel = skeletonize(volume, method='lee')
+
+    # 3. Get voxel indices
+    y_idx, x_idx = np.where(skel)
+
+    # 4. Compute bin centers
+    xs = 0.5 * (edges_x[:-1] + edges_x[1:])
+    ys = 0.5 * (edges_y[:-1] + edges_y[1:])
+
+    # 5. Convert voxel indices → real coordinates
+    X = xs[x_idx]
+    Y = ys[y_idx]
+
+    # Stack
+    coords = np.vstack([X, Y]).T
+
+    return coords
